@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sol e Lua</title>
+<style>
+:root{--bg:#f3f1ec;--fg:#1b1b1b;--btn:#ddd8cf;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15151a;--fg:#eee;--btn:#33333d}}
+:root[data-theme="dark"]{--bg:#15151a;--fg:#eee;--btn:#33333d}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;text-align:center;user-select:none;-webkit-user-select:none}
+h1{font-size:1.25rem;margin:12px 0 4px}
+p{margin:2px 12px 6px;font-size:.82rem;opacity:.85}
+canvas{width:100%;max-width:600px;aspect-ratio:3/2;border-radius:12px;touch-action:none}
+.pad{display:flex;justify-content:space-between;max-width:600px;margin:8px auto;padding:0 8px;gap:8px}
+.grp{display:flex;gap:6px}
+.pad button{width:54px;height:54px;border:0;border-radius:12px;background:var(--btn);color:var(--fg);font-size:1.3rem;touch-action:none}
+.s button{border-bottom:4px solid #ffb300}.m button{border-bottom:4px solid #9bb4ff}
+</style>
+</head>
+<body>
+<h1>☀ Sol e Lua ☾</h1>
+<p>Sol: A D W · Lua: ← → ↑ · Levem os dois às portas e colham as gemas. Cada nível tem 1 minuto e 30 segundos.</p>
+<p>Poça roxa (Noite) mata o Sol · poça dourada (Luz) mata a Lua · poça vermelha mata os dois · botões abrem o portão.</p>
+<canvas id="c" width="600" height="400"></canvas>
+<div class="pad">
+  <div class="grp s"><button data-k="a">◀</button><button data-k="w">▲</button><button data-k="d">▶</button></div>
+  <div class="grp m"><button data-k="ArrowLeft">◀</button><button data-k="ArrowUp">▲</button><button data-k="ArrowRight">▶</button></div>
+</div>
+<script>
+const x = c.getContext('2d'), keys = {};
+const held = {}, kn = e => e.key.length === 1 ? e.key.toLowerCase() : e.key;
+const release = () => { for (const k in keys) keys[k] = false; for (const k in held) held[k] = false; };
+onkeydown = e => {
+  const k = kn(e);
+  if (k.startsWith('Arrow')) e.preventDefault();
+  if (k === 'r') { load(0); return; }
+  if (e.repeat && !held[k]) return;
+  if (!started && !done) { if (!e.repeat) go(); return; }
+  held[k] = true; keys[k] = true;
+};
+onkeyup = e => { const k = kn(e); held[k] = false; keys[k] = false; };
+onblur = release; document.onvisibilitychange = release;
+document.querySelectorAll('[data-k]').forEach(b => {
+  const k = b.dataset.k;
+  b.onpointerdown = e => { e.preventDefault(); if (!started && !done) { go(); return; } keys[k] = true; };
+  ['pointerup', 'pointerleave', 'pointercancel', 'lostpointercapture'].forEach(n => b['on' + n] = () => keys[k] = false);
+});
+c.onclick = () => { if (done) load(0); else go(); };
+
+const levels = [
+  { name: 'Poças de Noite e Luz',
+    plats: [[0,380,600,20],[80,310,140,12],[300,260,140,12],[120,190,140,12],[330,130,260,12],[10,240,70,12],[470,300,100,12],[20,130,70,12]],
+    hz: [{r:[250,372,60,8],k:'sun'},{r:[400,372,60,8],k:'moon'}],
+    doors: {sun:[470,100,24,30], moon:[540,100,24,30]}, mv: [], btns: [], gate: null,
+    gems: [[140,290,'sun'],[370,240,'sun'],[190,170,'moon'],[400,110,'moon'],[280,362,'moon'],[430,362,'sun'],[45,220,'moon'],[520,280,'sun'],[55,110,'sun']] },
+  { name: 'O portão cooperativo',
+    plats: [[0,380,600,20],[500,300,100,12],[60,300,90,12],[180,230,90,12],[380,300,90,12],[380,220,90,12]],
+    hz: [{r:[150,372,60,8],k:'sun'},{r:[350,372,60,8],k:'moon'}],
+    btns: [[40,374,50,6],[430,374,50,6]], gate: [290,160,14,220], mv: [],
+    doors: {sun:[520,270,24,30], moon:[560,270,24,30]},
+    gems: [[180,362,'moon'],[380,362,'sun'],[540,250,'sun'],[60,350,'moon'],[105,280,'sun'],[225,210,'moon'],[425,280,'moon'],[425,200,'sun']] },
+  { name: 'Ponte móvel',
+    plats: [[0,380,160,20],[440,380,160,20],[480,300,100,12],[310,230,110,12],[140,170,100,12],[10,120,150,12],[200,270,70,12],[520,220,60,12],[30,300,70,12]],
+    mv: [{x:170,x0:170,y:340,w:80,rng:190,sp:.025}],
+    hz: [{r:[90,372,40,8],k:'moon'},{r:[500,372,40,8],k:'both'}],
+    doors: {sun:[20,90,24,30], moon:[70,90,24,30]}, btns: [], gate: null,
+    gems: [[110,362,'sun'],[250,310,'moon'],[520,280,'sun'],[350,210,'moon'],[190,150,'sun'],[235,250,'sun'],[550,200,'moon'],[65,280,'moon']] }
+];
+const TOTAL = levels.reduce((a, l) => a + l.gems.length, 0);
+const P = (id, x0, l, r, u) => ({id, x: x0, y: 340, x0, vx: 0, vy: 0, w: 20, h: 30, l, r, u, g: false});
+const ps = [P('sun', 20, 'a', 'd', 'w'), P('moon', 50, 'ArrowLeft', 'ArrowRight', 'ArrowUp')];
+const hit = (a, b) => a.x < b[0]+b[2] && a.x+a.w > b[0] && a.y < b[1]+b[3] && a.y+a.h > b[1];
+const HC = {sun:'#7a4dff', moon:'#ffd23c', both:'#e33'};
+let lv = 0, L, gems, won = 0, done = false, score = 0, t = 0, gopen = 0, started = false, timeLeft = 90, last = 0, lost = 0, base = 0;
+const go = () => { if (!started && !done) { started = true; last = performance.now(); } };
+
+// sprite da lua (crescente) e cenário
+const ms = document.createElement('canvas'); ms.width = ms.height = 32;
+const m = ms.getContext('2d');
+m.fillStyle = '#dfe6ff'; m.beginPath(); m.arc(16, 16, 12, 0, 7); m.fill();
+m.globalCompositeOperation = 'destination-out'; m.beginPath(); m.arc(23, 12, 10, 0, 7); m.fill();
+const sky = x.createLinearGradient(0, 0, 0, 400);
+sky.addColorStop(0, '#0b0b2b'); sky.addColorStop(1, '#3b2a6b');
+let s = 7; const rnd = () => (s = s * 16807 % 2147483647) / 2147483647;
+const stars = Array.from({length: 70}, () => [rnd()*600, rnd()*300, rnd()*1.4+.4, rnd()*6]);
+
+function load(n) {
+  lv = n; L = levels[n]; gems = L.gems.map(g => [...g, true]); won = 0; done = false; gopen = 0;
+  started = false; timeLeft = 90; lost = 0;
+  for (const k in keys) keys[k] = false;
+  for (const k in held) held[k] = false;
+  if (n === 0) score = 0;
+  base = score;
+  ps.forEach(p => { p.x = p.x0; p.y = 340; p.vx = 0; p.vy = 0; });
+}
+const respawn = p => { p.x = p.x0; p.y = 340; p.vy = 0; };
+
+function step(p, all, gr) {
+  p.vx = ((keys[p.r] ? 1 : 0) - (keys[p.l] ? 1 : 0)) * 3;
+  const ox = p.x; p.x = Math.max(0, Math.min(580, p.x + p.vx));
+  if (gr && hit(p, gr)) p.x = ox;
+  const old = p.y + p.h;
+  p.vy += .5; p.y += p.vy; p.g = false;
+  for (const [px, py, pw, dx = 0] of all)
+    if (p.vy >= 0 && old <= py && p.y + p.h >= py && p.x + p.w > px && p.x < px + pw) { p.y = py - p.h; p.vy = 0; p.g = true; p.x += dx; }
+  if (keys[p.u] && p.g) p.vy = -10;
+  if (p.y > 430) respawn(p);
+  for (const h of L.hz) if ((h.k === p.id || h.k === 'both') && hit(p, h.r)) respawn(p);
+  for (const g of gems) if (g[3] && g[2] === p.id && hit(p, [g[0]-8, g[1]-8, 16, 16])) { g[3] = false; score++; }
+}
+
+function drawSun(p) {
+  const cx = p.x + 10, cy = p.y + 15, e = p.vx > 0 ? 1 : p.vx < 0 ? -1 : 0;
+  x.save(); x.shadowColor = '#ffb300'; x.shadowBlur = 14;
+  x.strokeStyle = '#ffb300'; x.lineWidth = 2;
+  for (let i = 0; i < 8; i++) { const a = t*.03 + i*Math.PI/4; x.beginPath(); x.moveTo(cx+Math.cos(a)*12, cy+Math.sin(a)*12); x.lineTo(cx+Math.cos(a)*17, cy+Math.sin(a)*17); x.stroke(); }
+  x.fillStyle = '#ffd23c'; x.beginPath(); x.arc(cx, cy, 11, 0, 7); x.fill(); x.restore();
+  x.fillStyle = '#5a3300';
+  x.beginPath(); x.arc(cx-4+e, cy-2, 1.8, 0, 7); x.arc(cx+4+e, cy-2, 1.8, 0, 7); x.fill();
+  x.strokeStyle = '#5a3300'; x.lineWidth = 1.5; x.beginPath(); x.arc(cx+e, cy+2, 4, .2, Math.PI-.2); x.stroke();
+}
+function drawMoon(p) {
+  const cx = p.x + 10, cy = p.y + 15, e = p.vx > 0 ? 1 : p.vx < 0 ? -1 : 0;
+  x.save(); x.shadowColor = '#9bb4ff'; x.shadowBlur = 14; x.drawImage(ms, cx-16, cy-16); x.restore();
+  x.fillStyle = '#2a2f66'; x.beginPath(); x.arc(cx-5+e, cy-1, 1.8, 0, 7); x.fill();
+  x.strokeStyle = '#2a2f66'; x.lineWidth = 1.5; x.beginPath(); x.arc(cx-5+e, cy+3, 3, .2, Math.PI-.2); x.stroke();
+}
+function door(d, kind, lit) {
+  x.save(); if (lit) { x.shadowColor = '#fff'; x.shadowBlur = 16; }
+  x.fillStyle = kind === 'sun' ? '#b8860b' : '#3a4a9a';
+  x.beginPath(); x.arc(d[0]+12, d[1]+12, 12, Math.PI, 0); x.lineTo(d[0]+24, d[1]+30); x.lineTo(d[0], d[1]+30); x.fill(); x.restore();
+  if (kind === 'sun') { x.fillStyle = '#ffd23c'; x.beginPath(); x.arc(d[0]+12, d[1]+14, 6, 0, 7); x.fill(); }
+  else x.drawImage(ms, d[0]+4, d[1]+6, 16, 16);
+}
+
+function loop() {
+  t++;
+  const M = L.mv.map(q => { const nx = q.x0 + (Math.sin(t*q.sp)+1)/2*q.rng, dx = nx - q.x; q.x = nx; return [nx, q.y, q.w, dx]; });
+  const all = L.plats.map(q => [q[0], q[1], q[2], 0]).concat(M);
+  const prs = L.btns.map(b => ps.some(p => hit(p, b)));
+  gopen = Math.max(0, Math.min(1, gopen + (prs.some(Boolean) ? .06 : -.06)));
+  const gr = L.gate && gopen < .95 ? [L.gate[0], L.gate[1], L.gate[2], L.gate[3]*(1-gopen)] : null;
+  if (started && !done && !lost) {
+    const n = performance.now();
+    if (!won) timeLeft -= Math.min(n - last, 100) / 1000;
+    last = n;
+    if (timeLeft <= 0 && !won) { timeLeft = 0; lost = 1; }
+    ps.forEach(p => step(p, all, gr));
+    if (!won && hit(ps[0], L.doors.sun) && hit(ps[1], L.doors.moon)) won = 1;
+    if (won && ++won > 90) { if (lv + 1 < levels.length) load(lv + 1); else done = true; }
+  }
+  // cenário
+  x.fillStyle = sky; x.fillRect(0, 0, 600, 400);
+  stars.forEach(q => { x.globalAlpha = .5 + .5*Math.sin(t*.04 + q[3]); x.fillStyle = '#fff'; x.fillRect(q[0], q[1], q[2], q[2]); });
+  x.globalAlpha = 1;
+  let g1 = x.createRadialGradient(60, 50, 5, 60, 50, 90); g1.addColorStop(0, 'rgba(255,200,60,.35)'); g1.addColorStop(1, 'rgba(255,200,60,0)');
+  x.fillStyle = g1; x.fillRect(0, 0, 200, 160);
+  x.drawImage(ms, 520, 20, 56, 56);
+  [['#1d1b45', 310, 22, .02], ['#14132f', 340, 14, .035]].forEach(([col, y0, a, f]) => {
+    x.fillStyle = col; x.beginPath(); x.moveTo(0, 400);
+    for (let i = 0; i <= 600; i += 10) x.lineTo(i, y0 + Math.sin(i*f + y0)*a);
+    x.lineTo(600, 400); x.fill();
+  });
+  // plataformas
+  all.forEach(([px, py, pw], i) => {
+    const mov = i >= L.plats.length, ph = py >= 380 ? 20 : 12;
+    x.fillStyle = mov ? '#6a5acd' : '#4b4a6b'; x.fillRect(px, py, pw, ph);
+    x.fillStyle = mov ? '#b3a8ff' : '#8c8ac2'; x.fillRect(px, py, pw, 3);
+    x.fillStyle = 'rgba(0,0,0,.22)'; for (let k = px + 10; k < px + pw - 2; k += 20) x.fillRect(k, py + 4, 1, ph - 4);
+  });
+  // poças
+  L.hz.forEach(h => {
+    x.fillStyle = HC[h.k]; x.fillRect(...h.r);
+    x.fillStyle = 'rgba(255,255,255,.55)';
+    for (let i = 0; i < h.r[2]; i += 6) x.fillRect(h.r[0] + i, h.r[1] - 1 - Math.sin(t*.12 + i)*1.5, 4, 3);
+  });
+  // botões e portão
+  L.btns.forEach((b, i) => { x.fillStyle = prs[i] ? '#7be07b' : '#ff7a59'; x.fillRect(b[0], b[1] + (prs[i] ? 3 : 0), b[2], b[3] - (prs[i] ? 3 : 0)); });
+  if (L.gate) {
+    const G = L.gate, h = G[3]*(1-gopen);
+    x.fillStyle = '#c4c4e0'; x.fillRect(G[0], G[1], G[2], h);
+    x.fillStyle = 'rgba(0,0,0,.3)'; x.fillRect(G[0]+4, G[1], 2, h); x.fillRect(G[0]+9, G[1], 2, h);
+  }
+  door(L.doors.sun, 'sun', hit(ps[0], L.doors.sun));
+  door(L.doors.moon, 'moon', hit(ps[1], L.doors.moon));
+  gems.forEach(g => { if (!g[3]) return; const yy = g[1] + Math.sin(t*.08 + g[0])*2;
+    x.save(); x.shadowColor = g[2] === 'sun' ? '#ffd23c' : '#9bb4ff'; x.shadowBlur = 10;
+    x.fillStyle = g[2] === 'sun' ? '#ffd23c' : '#bcd0ff';
+    x.beginPath(); x.moveTo(g[0], yy-9); x.lineTo(g[0]+7, yy); x.lineTo(g[0], yy+9); x.lineTo(g[0]-7, yy); x.fill(); x.restore(); });
+  drawSun(ps[0]); drawMoon(ps[1]);
+  // HUD
+  x.fillStyle = '#fff'; x.font = '14px system-ui,sans-serif'; x.textAlign = 'left';
+  x.fillText('Nível ' + (lv+1) + '/' + levels.length + ' · Gemas: ' + score + '/' + TOTAL, 10, 20);
+  x.textAlign = 'center'; x.font = '12px system-ui,sans-serif'; x.globalAlpha = .7; x.fillText(L.name, 300, 20); x.globalAlpha = 1;
+  x.textAlign = 'right'; x.font = '16px system-ui,sans-serif'; x.fillStyle = timeLeft <= 10 ? '#ff6b6b' : '#fff';
+  x.fillText('⏱ ' + Math.ceil(timeLeft) + 's', 590, 20); x.textAlign = 'center';
+  if (won || done) {
+    x.fillStyle = 'rgba(0,0,0,.45)'; x.fillRect(0, 150, 600, 100);
+    x.fillStyle = '#fff'; x.font = '34px system-ui,sans-serif';
+    x.fillText(done ? 'Fim de jogo! Gemas: ' + score + '/' + TOTAL : 'Nível concluído!', 300, 200);
+    if (done) { x.font = '15px system-ui,sans-serif'; x.fillText('Toque aqui ou aperte R para jogar de novo', 300, 230); }
+  }
+  if ((!started && !done) || lost) {
+    x.fillStyle = 'rgba(0,0,0,.5)'; x.fillRect(0, 150, 600, 100);
+    x.fillStyle = '#fff'; x.font = '30px system-ui,sans-serif';
+    x.fillText(lost ? 'Tempo esgotado!' : 'Pronto? Nível ' + (lv+1), 300, 195);
+    x.font = '15px system-ui,sans-serif';
+    x.fillText(lost ? 'Reiniciando o nível…' : 'Aperte uma tecla ou toque para começar · 1 min 30 s', 300, 225);
+  }
+  if (lost && ++lost > 90) { score = base; load(lv); }
+  requestAnimationFrame(loop);
+}
+load(0); loop();
+</script>
+</body>
+</html>
